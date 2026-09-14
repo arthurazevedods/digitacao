@@ -8,18 +8,28 @@ interface GameStats {
   accuracy: number;
   wpm: number;
 }
+type FinishReason = 'timeout' | 'completed' | 'manual' | null;
+const DIFFICULTY_TIME: Record<string, number> = {
+  facil: 120,
+  medio: 100,
+  dificil: 90
+};
 const Game = () => {
   const {
-    difficulty
+    difficulty,
+    mode: modeParam
   } = useParams<{
     difficulty: string;
+    mode: string;
   }>();
+  const mode = modeParam === 'finish' ? 'finish' : 'chain';
   const navigate = useNavigate();
   const [text, setText] = useState('');
   const [userInput, setUserInput] = useState('');
   const [timer, setTimer] = useState(0);
   const [isActive, setIsActive] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
+  const [finishReason, setFinishReason] = useState<FinishReason>(null);
   const [stats, setStats] = useState<GameStats>({
     correctChars: 0,
     totalChars: 0,
@@ -30,16 +40,11 @@ const Game = () => {
   const intervalRef = useRef<number | null>(null);
   // Set timer based on difficulty
   useEffect(() => {
-    let timeInSeconds = 180; // Default: 3 minutes for easy
-    if (difficulty === 'medio') {
-      timeInSeconds = 120; // 2 minutes for medium
-    } else if (difficulty === 'dificil') {
-      timeInSeconds = 60; // 1 minute for hard
-    }
-    setTimer(timeInSeconds);
+    setTimer(getDifficultyTime());
     // Generate text based on difficulty
     const generatedText = generateText(difficulty || 'facil');
     setText(generatedText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [difficulty]);
   // Timer countdown
   useEffect(() => {
@@ -49,12 +54,23 @@ const Game = () => {
       }, 1000);
     } else if (timer === 0 && isActive) {
       clearInterval(intervalRef.current as number);
-      endGame();
+      endGame('timeout');
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, timer]);
+  // Detect when the current text has been fully typed before time runs out
+  useEffect(() => {
+    if (!isActive || isFinished || text.length === 0 || userInput.length < text.length) return;
+    if (mode === 'finish') {
+      endGame('completed');
+    } else {
+      setText(prevText => `${prevText} ${generateText(difficulty || 'facil', prevText)}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userInput, text, isActive, isFinished, mode]);
   // Start timer when user begins typing
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -64,9 +80,10 @@ const Game = () => {
     setUserInput(value);
   };
   // Calculate statistics when game ends
-  const endGame = () => {
+  const endGame = (reason: FinishReason) => {
     setIsActive(false);
     setIsFinished(true);
+    setFinishReason(reason);
     // Calculate correct characters
     let correctCount = 0;
     for (let i = 0; i < userInput.length; i++) {
@@ -75,9 +92,10 @@ const Game = () => {
       }
     }
     const accuracy = Math.round(correctCount / userInput.length * 100) || 0;
-    // Calculate WPM (words per minute)
+    // Calculate WPM (words per minute) using the time actually spent typing
     // Assuming average word is 5 characters
-    const minutes = getDifficultyTime() / 60;
+    const elapsedSeconds = Math.max(getDifficultyTime() - timer, 1);
+    const minutes = elapsedSeconds / 60;
     const wpm = Math.round(correctCount / 5 / minutes);
     setStats({
       correctChars: correctCount,
@@ -88,9 +106,7 @@ const Game = () => {
   };
   // Get the original time based on difficulty
   const getDifficultyTime = (): number => {
-    if (difficulty === 'dificil') return 60;
-    if (difficulty === 'medio') return 120;
-    return 180; // facil
+    return DIFFICULTY_TIME[difficulty || 'facil'] ?? DIFFICULTY_TIME.facil;
   };
   // Format time as MM:SS
   const formatTime = (seconds: number): string => {
@@ -98,11 +114,18 @@ const Game = () => {
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
+  // Finish game immediately (zeroes the timer)
+  const finishGame = () => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    setTimer(0);
+    endGame('manual');
+  };
   // Restart game
   const restartGame = () => {
     setUserInput('');
     setIsActive(false);
     setIsFinished(false);
+    setFinishReason(null);
     setTimer(getDifficultyTime());
     const generatedText = generateText(difficulty || 'facil');
     setText(generatedText);
@@ -155,6 +178,17 @@ const Game = () => {
         return 'bg-green-100 text-green-700 border-green-200';
     }
   };
+  // Message shown on the timer/results depending on how the round ended
+  const getFinishMessage = () => {
+    switch (finishReason) {
+      case 'completed':
+        return 'Texto concluído!';
+      case 'manual':
+        return 'Encerrado por você';
+      default:
+        return 'Tempo esgotado!';
+    }
+  };
   return <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-100 flex flex-col items-center justify-center p-4 w-full">
       <div className="max-w-4xl w-full bg-white rounded-xl shadow-lg p-6">
         {/* Header */}
@@ -165,8 +199,13 @@ const Game = () => {
           <div className={`px-4 py-1 rounded-full border ${getDifficultyColorClass()}`}>
             Nível: {getDifficultyName()}
           </div>
-          <div className="text-xl font-bold">
-            {isFinished ? 'Tempo esgotado!' : formatTime(timer)}
+          <div className="flex items-center gap-3">
+            <div className="text-xl font-bold">
+              {isFinished ? getFinishMessage() : formatTime(timer)}
+            </div>
+            {!isFinished && <button onClick={finishGame} className="px-3 py-1 text-sm bg-red-100 text-red-700 border border-red-200 rounded-full hover:bg-red-200">
+                Finalizar
+              </button>}
           </div>
         </div>
         {!isFinished ? <>
